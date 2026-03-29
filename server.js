@@ -7,40 +7,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* =========================
-   IN-MEMORY STORE
-========================= */
+/* ================= STORE ================= */
 let activeUrls = [];
+let alertEmail = "laxshlax@gmail.com";
 
-/* =========================
-   EMAIL SETUP (OPTIONAL)
-========================= */
+/* ================= EMAIL ================= */
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
     user: "laxshlax@gmail.com",
-    pass: process.env.EMAIL_PASS // Use App Password
+    pass: process.env.EMAIL_PASS
   }
 });
 
-/* =========================
-   HEALTH CHECK
-========================= */
+/* ================= HEALTH ================= */
 app.get("/", (req, res) => {
   res.send("Monitoring Service is Active");
 });
 
-/* =========================
-   CHECK ROUTE (MAIN FIX)
-========================= */
+/* ================= CHECK ================= */
 app.post("/check", async (req, res) => {
   const { urls } = req.body;
 
   if (!urls || !Array.isArray(urls)) {
     return res.status(400).json({ error: "Invalid input" });
   }
-
-  console.log("Incoming URLs:", urls);
 
   const results = [];
 
@@ -53,13 +44,12 @@ app.post("/check", async (req, res) => {
 
       results.push({
         url,
-        status:
-          resp.status === 200
-            ? "✅ Working"
-            : `❌ Fail (${resp.status})`
+        status: resp.status === 200
+          ? "✅ Working"
+          : `❌ Fail (${resp.status})`
       });
 
-    } catch (err) {
+    } catch {
       results.push({
         url,
         status: "⚠️ Down/Timeout"
@@ -70,41 +60,65 @@ app.post("/check", async (req, res) => {
   res.json(results);
 });
 
-/* =========================
-   URL MANAGEMENT (OPTIONAL)
-========================= */
+/* ================= EMAIL SET ================= */
+app.post("/set-email", (req, res) => {
+  const { email } = req.body;
 
-// Get all URLs
-app.get("/urls", (req, res) => {
-  res.json(activeUrls);
+  if (!email || !email.includes("@")) {
+    return res.status(400).json({ error: "Invalid email" });
+  }
+
+  alertEmail = email;
+  res.json({ message: "Email updated successfully" });
 });
 
-// Add URL
+/* ================= INTERVAL ================= */
+let intervalMs = 3600000;
+let intervalHandle = null;
+
+function startScheduler() {
+  if (intervalHandle) clearInterval(intervalHandle);
+
+  intervalHandle = setInterval(checkAndEmail, intervalMs);
+  console.log("Interval:", intervalMs / 60000, "minutes");
+}
+
+app.post("/set-interval", (req, res) => {
+  const { minutes } = req.body;
+
+  if (!minutes || minutes < 1) {
+    return res.status(400).json({ error: "Invalid minutes" });
+  }
+
+  intervalMs = minutes * 60000;
+  startScheduler();
+
+  res.json({ message: `Interval set to ${minutes} minutes` });
+});
+
+/* ================= URL MGMT ================= */
+app.get("/urls", (req, res) => res.json(activeUrls));
+
 app.post("/urls/add", (req, res) => {
   const { url } = req.body;
 
   if (url && !activeUrls.includes(url)) {
     activeUrls.push(url);
-    return res.json({ message: "Added", list: activeUrls });
+    return res.json({ message: "Added" });
   }
 
   res.status(400).json({ error: "Invalid or duplicate URL" });
 });
 
-// Remove URL
 app.post("/urls/remove", (req, res) => {
   const { url } = req.body;
   activeUrls = activeUrls.filter(u => u !== url);
-  res.json({ message: "Removed", list: activeUrls });
+  res.json({ message: "Removed" });
 });
 
-/* =========================
-   SCHEDULED MONITOR (1 HOUR)
-========================= */
+/* ================= SCHEDULER ================= */
 const checkAndEmail = async () => {
   if (activeUrls.length === 0) return;
-
-  console.log("🚀 Scheduled check:", activeUrls);
 
   const results = [];
 
@@ -117,10 +131,9 @@ const checkAndEmail = async () => {
 
       results.push({
         url,
-        status:
-          resp.status === 200
-            ? "✅ Working"
-            : `❌ Fail (${resp.status})`
+        status: resp.status === 200
+          ? "✅ Working"
+          : `❌ Fail (${resp.status})`
       });
 
     } catch {
@@ -131,54 +144,30 @@ const checkAndEmail = async () => {
     }
   }
 
+  const hasFailure = results.some(r => !r.status.includes("Working"));
+
+  if (!hasFailure) return; // only send if problem
+
   const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
 
   try {
     await transporter.sendMail({
       from: '"URL Monitor" <laxshlax@gmail.com>',
-      to: "laxshlax@gmail.com",
-      subject: `URL Report (${new Date().toLocaleTimeString()})`,
+      to: alertEmail,
+      subject: "⚠️ URL Alert",
       text: message
     });
 
-    console.log("📧 Email sent");
+    console.log("Email sent");
   } catch (err) {
     console.error("Email failed:", err.message);
   }
 };
 
-// run as per html
-let intervalMs = 3600000;
-let intervalHandle = null;
-
-function startScheduler() {
-  if (intervalHandle) clearInterval(intervalHandle);
-
-  intervalHandle = setInterval(checkAndEmail, intervalMs);
-
-  console.log("⏱ Scheduler set to", intervalMs / 60000, "minutes");
-}
-
-// Start initially
-startScheduler();
-
-// API to update interval
-app.post("/set-interval", (req, res) => {
-  const { minutes } = req.body;
-
-  if (!minutes || minutes < 1) {
-    return res.status(400).json({ error: "Invalid minutes" });
-  }
-
-  intervalMs = minutes * 60000;
-  startScheduler();
-
-  res.json({ message: `Interval updated to ${minutes} minutes` });
-});
-/* =========================
-   START SERVER
-========================= */
+/* ================= START ================= */
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on", PORT);
+  startScheduler();
 });
