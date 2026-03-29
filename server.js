@@ -7,20 +7,18 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Test route
+// Health check route
 app.get("/", (req, res) => {
-  res.send("API working");
+  res.send("API is running");
 });
 
-// MAIN ROUTE
+// Main URL check route
 app.post("/check", async (req, res) => {
   try {
-    console.log("Incoming body:", req.body);
-
     const urls = req.body.urls;
 
     if (!urls || !Array.isArray(urls)) {
-      return res.json([{ error: "No URLs received" }]);
+      return res.json([{ error: "Invalid input: URLs missing" }]);
     }
 
     const results = [];
@@ -29,40 +27,49 @@ app.post("/check", async (req, res) => {
       try {
         const response = await axios.get(url, {
           maxRedirects: 5,
-          timeout: 10000
+          timeout: 10000,
+          validateStatus: () => true // 🔥 prevents axios from throwing on 4xx
         });
 
+        const statusCode = response.status;
+        const body = response.data;
+
+        // DOI-specific detection
         if (
-          typeof response.data === "string" &&
-          response.data.includes("DOI Not Found")
+          typeof body === "string" &&
+          body.includes("DOI Not Found")
         ) {
           results.push({ url, status: "Invalid DOI" });
+          continue;
+        }
+
+        // Status classification
+        if (statusCode === 200) {
+          results.push({ url, status: "Working (200)" });
+        } else if (statusCode === 403) {
+          results.push({ url, status: "Working (403 - Restricted)" });
+        } else if (statusCode === 404) {
+          results.push({ url, status: "Fail (404)" });
         } else {
-          results.push({ url, status: "Working (" + response.status + ")" });
+          results.push({ url, status: "Fail (" + statusCode + ")" });
         }
 
       } catch (err) {
-        const code = err.response?.status;
-
-if (code === 403) {
-  results.push({ url, status: "Working (403 - Restricted)" });
-} else if (code === 404) {
-  results.push({ url, status: "Fail (404)" });
-} else {
-  results.push({ url, status: "Fail (" + (code || "DOWN") + ")" });
-}
+        const code = err.response?.status || "DOWN";
+        results.push({ url, status: "Fail (" + code + ")" });
       }
     }
 
-    console.log("Returning:", results);
-
-    return res.json(results); // 🔥 CRITICAL
+    return res.json(results);
 
   } catch (err) {
     console.error("SERVER ERROR:", err);
-    return res.status(500).json({ error: "Server crashed" });
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
+// Start server
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log("Server running on port", PORT));
+app.listen(PORT, () => {
+  console.log("Server running on port", PORT);
+});
