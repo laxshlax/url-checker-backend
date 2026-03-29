@@ -13,12 +13,15 @@ app.use(express.json());
 ========================= */
 const transporter = nodemailer.createTransport({
   host: "smtp.gmail.com",
-  port: 587,
-  secure: false, // true for 465, false for other ports
+  port: 465,
+  secure: true, // true for 465, false for other ports
   auth: {
     user: "laxshlax@gmail.com",
     pass: process.env.EMAIL_PASS // Use a 16-character App Password here
-  }
+  },
+   connectionTimeout: 10000, // Wait 10 seconds before giving up
+  greetingTimeout: 10000,
+  socketTimeout: 10000
 });
 
 // Verify connection configuration on startup
