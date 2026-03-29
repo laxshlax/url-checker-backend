@@ -147,9 +147,34 @@ const checkAndEmail = async () => {
   }
 };
 
-// Run every 1 hour
-setInterval(checkAndEmail, 3600000);
+// run as per html
+let intervalMs = 3600000;
+let intervalHandle = null;
 
+function startScheduler() {
+  if (intervalHandle) clearInterval(intervalHandle);
+
+  intervalHandle = setInterval(checkAndEmail, intervalMs);
+
+  console.log("⏱ Scheduler set to", intervalMs / 60000, "minutes");
+}
+
+// Start initially
+startScheduler();
+
+// API to update interval
+app.post("/set-interval", (req, res) => {
+  const { minutes } = req.body;
+
+  if (!minutes || minutes < 1) {
+    return res.status(400).json({ error: "Invalid minutes" });
+  }
+
+  intervalMs = minutes * 60000;
+  startScheduler();
+
+  res.json({ message: `Interval updated to ${minutes} minutes` });
+});
 /* =========================
    START SERVER
 ========================= */
