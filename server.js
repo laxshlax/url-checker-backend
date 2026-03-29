@@ -82,16 +82,15 @@ app.post("/send-email", async (req, res) => {
 
   try {
     const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true,
-  auth: {
-    user: "laxshlax@gmail.com",
-    pass: "xuyynatwmkywhxjm" // 🔴 your app password (NO spaces)
-  }
-});
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      auth: {
+        user: "laxshlax@gmail.com",          // ✅ your email
+        pass: process.env.EMAIL_PASS         // 🔐 from Render env
+      }
+    });
 
-    // Format email body
     const message = results
       .map(r => `${r.url} → ${r.status}`)
       .join("\n");
@@ -106,7 +105,7 @@ app.post("/send-email", async (req, res) => {
     return res.json({ success: true });
 
   } catch (err) {
-    console.error("EMAIL ERROR:", err);
+    console.error("EMAIL ERROR:", err.message);
     return res.status(500).json({ error: "Email failed" });
   }
 });
