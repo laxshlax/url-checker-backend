@@ -85,7 +85,7 @@ app.post("/send-email", async (req, res) => {
       service: "gmail",
       auth: {
         user: "laxshlax@gmail.com",       // 🔴 replace
-        pass: "rtiv gypm nfig zlbn"           // 🔴 replace (Gmail App Password)
+        pass: "rtivgypmnfigzlbn"           // 🔴 replace (Gmail App Password)
       }
     });
 
