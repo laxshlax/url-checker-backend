@@ -7,10 +7,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-/* ================= STORE ================= */
-let activeUrls = []; 
-// each item = { url, status, lastChecked, lastEmailSent }
-
+let activeUrls = [];
 let alertEmail = "laxshlax@gmail.com";
 
 /* ================= EMAIL ================= */
@@ -29,13 +26,10 @@ app.get("/", (req, res) => {
 
 /* ================= CHECK ================= */
 app.post("/check", async (req, res) => {
-  const { urls } = req.body;
-
-  if (!urls || !Array.isArray(urls)) {
-    return res.status(400).json({ error: "Invalid input" });
-  }
+  const { urls, sendEmail } = req.body;
 
   const results = [];
+  let hasFailure = false;
 
   for (const url of urls) {
     try {
@@ -44,39 +38,49 @@ app.post("/check", async (req, res) => {
         validateStatus: () => true
       });
 
-      results.push({
-        url,
-        status: resp.status === 200
-          ? "✅ Working"
-          : `❌ Fail (${resp.status})`
-      });
+      const status = resp.status === 200
+        ? "✅ Working"
+        : `❌ Fail (${resp.status})`;
+
+      if (!status.includes("Working")) hasFailure = true;
+
+      results.push({ url, status });
 
     } catch {
-      results.push({
-        url,
-        status: "⚠️ Down/Timeout"
-      });
+      results.push({ url, status: "⚠️ Down/Timeout" });
+      hasFailure = true;
     }
   }
 
-  res.json(results);
+  // Email for manual check
+  if (sendEmail) {
+    const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
+
+    try {
+      await transporter.sendMail({
+        from: '"URL Monitor" <laxshlax@gmail.com>',
+        to: alertEmail,
+        subject: "Manual URL Check Report",
+        text: message
+      });
+    } catch (err) {
+      console.error("Manual email failed:", err.message);
+    }
+  }
+
+  res.json({ results });
 });
 
 /* ================= EMAIL SET ================= */
 app.post("/set-email", (req, res) => {
   const { email } = req.body;
-
-  if (!email || !email.includes("@")) {
-    return res.status(400).json({ error: "Invalid email" });
-  }
-
   alertEmail = email;
   res.json({ message: "Email updated" });
 });
 
 /* ================= INTERVAL ================= */
 let intervalMs = 3600000;
-let intervalHandle = null;
+let intervalHandle;
 
 function startScheduler() {
   if (intervalHandle) clearInterval(intervalHandle);
@@ -85,15 +89,9 @@ function startScheduler() {
 
 app.post("/set-interval", (req, res) => {
   const { minutes } = req.body;
-
-  if (!minutes || minutes < 1) {
-    return res.status(400).json({ error: "Invalid minutes" });
-  }
-
   intervalMs = minutes * 60000;
   startScheduler();
-
-  res.json({ message: `Interval set to ${minutes} minutes` });
+  res.json({ message: "Interval updated" });
 });
 
 /* ================= URL MGMT ================= */
@@ -107,10 +105,6 @@ app.get("/urls", (req, res) => {
 
 app.post("/urls/add", (req, res) => {
   const { url } = req.body;
-
-  if (!url || activeUrls.find(u => u.url === url)) {
-    return res.status(400).json({ error: "Invalid or duplicate URL" });
-  }
 
   activeUrls.push({
     url,
@@ -158,9 +152,7 @@ const checkAndEmail = async () => {
 
   if (!hasFailure) return;
 
-  const message = activeUrls
-    .map(r => `${r.url} -> ${r.status}`)
-    .join("\n");
+  const message = activeUrls.map(r => `${r.url} -> ${r.status}`).join("\n");
 
   try {
     await transporter.sendMail({
@@ -177,8 +169,6 @@ const checkAndEmail = async () => {
         u.lastEmailSent = now;
       }
     });
-
-    console.log("Email sent");
 
   } catch (err) {
     console.error("Email failed:", err.message);
