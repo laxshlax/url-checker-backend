@@ -8,7 +8,9 @@ app.use(cors());
 app.use(express.json());
 
 /* ================= STORE ================= */
-let activeUrls = [];
+let activeUrls = []; 
+// each item = { url, status, lastChecked, lastEmailSent }
+
 let alertEmail = "laxshlax@gmail.com";
 
 /* ================= EMAIL ================= */
@@ -69,7 +71,7 @@ app.post("/set-email", (req, res) => {
   }
 
   alertEmail = email;
-  res.json({ message: "Email updated successfully" });
+  res.json({ message: "Email updated" });
 });
 
 /* ================= INTERVAL ================= */
@@ -78,9 +80,7 @@ let intervalHandle = null;
 
 function startScheduler() {
   if (intervalHandle) clearInterval(intervalHandle);
-
   intervalHandle = setInterval(checkAndEmail, intervalMs);
-  console.log("Interval:", intervalMs / 60000, "minutes");
 }
 
 app.post("/set-interval", (req, res) => {
@@ -97,22 +97,34 @@ app.post("/set-interval", (req, res) => {
 });
 
 /* ================= URL MGMT ================= */
-app.get("/urls", (req, res) => res.json(activeUrls));
+app.get("/urls", (req, res) => {
+  res.json({
+    interval: intervalMs / 60000,
+    email: alertEmail,
+    urls: activeUrls
+  });
+});
 
 app.post("/urls/add", (req, res) => {
   const { url } = req.body;
 
-  if (url && !activeUrls.includes(url)) {
-    activeUrls.push(url);
-    return res.json({ message: "Added" });
+  if (!url || activeUrls.find(u => u.url === url)) {
+    return res.status(400).json({ error: "Invalid or duplicate URL" });
   }
 
-  res.status(400).json({ error: "Invalid or duplicate URL" });
+  activeUrls.push({
+    url,
+    status: "Not checked yet",
+    lastChecked: null,
+    lastEmailSent: null
+  });
+
+  res.json({ message: "Added" });
 });
 
 app.post("/urls/remove", (req, res) => {
   const { url } = req.body;
-  activeUrls = activeUrls.filter(u => u !== url);
+  activeUrls = activeUrls.filter(u => u.url !== url);
   res.json({ message: "Removed" });
 });
 
@@ -120,35 +132,35 @@ app.post("/urls/remove", (req, res) => {
 const checkAndEmail = async () => {
   if (activeUrls.length === 0) return;
 
-  const results = [];
+  let hasFailure = false;
 
-  for (const url of activeUrls) {
+  for (const item of activeUrls) {
     try {
-      const resp = await axios.get(url, {
+      const resp = await axios.get(item.url, {
         timeout: 10000,
         validateStatus: () => true
       });
 
-      results.push({
-        url,
-        status: resp.status === 200
-          ? "✅ Working"
-          : `❌ Fail (${resp.status})`
-      });
+      item.status = resp.status === 200
+        ? "✅ Working"
+        : `❌ Fail (${resp.status})`;
 
     } catch {
-      results.push({
-        url,
-        status: "⚠️ Down/Timeout"
-      });
+      item.status = "⚠️ Down/Timeout";
+    }
+
+    item.lastChecked = new Date().toLocaleString();
+
+    if (!item.status.includes("Working")) {
+      hasFailure = true;
     }
   }
 
-  const hasFailure = results.some(r => !r.status.includes("Working"));
+  if (!hasFailure) return;
 
-  if (!hasFailure) return; // only send if problem
-
-  const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
+  const message = activeUrls
+    .map(r => `${r.url} -> ${r.status}`)
+    .join("\n");
 
   try {
     await transporter.sendMail({
@@ -158,7 +170,16 @@ const checkAndEmail = async () => {
       text: message
     });
 
+    const now = new Date().toLocaleString();
+
+    activeUrls.forEach(u => {
+      if (!u.status.includes("Working")) {
+        u.lastEmailSent = now;
+      }
+    });
+
     console.log("Email sent");
+
   } catch (err) {
     console.error("Email failed:", err.message);
   }
