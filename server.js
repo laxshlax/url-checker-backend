@@ -7,8 +7,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* ================= STORE ================= */
 let activeUrls = [];
 let alertEmail = "laxshlax@gmail.com";
+
+let manualSubject = "Manual URL Check Report";
+let monitorSubject = "⚠️ URL Alert";
 
 /* ================= EMAIL ================= */
 const transporter = nodemailer.createTransport({
@@ -24,61 +28,76 @@ app.get("/", (req, res) => {
   res.send("Monitoring Service is Active");
 });
 
-/* ================= CHECK ================= */
+/* ================= MANUAL CHECK ================= */
 app.post("/check", async (req, res) => {
   const { urls, sendEmail } = req.body;
 
-  const results = [];
-  let hasFailure = false;
+  try {
+    const results = await Promise.all(
+      urls.map(async (url) => {
+        try {
+          const resp = await axios.get(url, {
+            timeout: 8000,
+            validateStatus: () => true
+          });
 
-  for (const url of urls) {
-    try {
-      const resp = await axios.get(url, {
-        timeout: 10000,
-        validateStatus: () => true
-      });
+          return {
+            url,
+            status:
+              resp.status === 200
+                ? "✅ Working"
+                : `❌ Fail (${resp.status})`
+          };
+        } catch {
+          return { url, status: "⚠️ Down/Timeout" };
+        }
+      })
+    );
 
-      const status = resp.status === 200
-        ? "✅ Working"
-        : `❌ Fail (${resp.status})`;
+    // Send email for manual check
+    if (sendEmail) {
+      const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
 
-      if (!status.includes("Working")) hasFailure = true;
-
-      results.push({ url, status });
-
-    } catch {
-      results.push({ url, status: "⚠️ Down/Timeout" });
-      hasFailure = true;
-    }
-  }
-
-  // Email for manual check
-  if (sendEmail) {
-    const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
-
-    try {
       await transporter.sendMail({
         from: '"URL Monitor" <laxshlax@gmail.com>',
         to: alertEmail,
-        subject: "Manual URL Check Report",
+        subject: manualSubject,
         text: message
       });
-    } catch (err) {
-      console.error("Manual email failed:", err.message);
     }
-  }
 
-  res.json({ results });
+    res.json({ results });
+
+  } catch (err) {
+    console.error("Manual check error:", err.message);
+    res.status(500).json({ error: "Check failed" });
+  }
 });
 
-/* ================= EMAIL SET ================= */
+/* ================= CRON MONITOR (NEW) ================= */
+app.get("/check-monitor", async (req, res) => {
+  console.log("🔔 External monitor trigger received");
+  await checkAndEmail();
+  res.send("Monitoring executed");
+});
+
+/* ================= SUBJECTS ================= */
+app.post("/set-subjects", (req, res) => {
+  const { manual, monitor } = req.body;
+
+  if (manual) manualSubject = manual;
+  if (monitor) monitorSubject = monitor;
+
+  res.json({ message: "Subjects updated" });
+});
+
+/* ================= EMAIL ================= */
 app.post("/set-email", (req, res) => {
-  const { email } = req.body;
-  alertEmail = email;
+  alertEmail = req.body.email;
   res.json({ message: "Email updated" });
 });
 
-/* ================= INTERVAL ================= */
+/* ================= INTERVAL (OPTIONAL) ================= */
 let intervalMs = 3600000;
 let intervalHandle;
 
@@ -88,23 +107,28 @@ function startScheduler() {
 }
 
 app.post("/set-interval", (req, res) => {
-  const { minutes } = req.body;
-  intervalMs = minutes * 60000;
+  intervalMs = req.body.minutes * 60000;
   startScheduler();
   res.json({ message: "Interval updated" });
 });
 
-/* ================= URL MGMT ================= */
+/* ================= URL MANAGEMENT ================= */
 app.get("/urls", (req, res) => {
   res.json({
     interval: intervalMs / 60000,
     email: alertEmail,
+    manualSubject,
+    monitorSubject,
     urls: activeUrls
   });
 });
 
 app.post("/urls/add", (req, res) => {
   const { url } = req.body;
+
+  if (!url || activeUrls.find(u => u.url === url)) {
+    return res.status(400).json({ error: "Invalid or duplicate URL" });
+  }
 
   activeUrls.push({
     url,
@@ -122,16 +146,21 @@ app.post("/urls/remove", (req, res) => {
   res.json({ message: "Removed" });
 });
 
-/* ================= SCHEDULER ================= */
+/* ================= CORE MONITOR LOGIC ================= */
 const checkAndEmail = async () => {
-  if (activeUrls.length === 0) return;
+  if (!activeUrls.length) {
+    console.log("No URLs to monitor");
+    return;
+  }
+
+  console.log("Running monitoring check...");
 
   let hasFailure = false;
 
   for (const item of activeUrls) {
     try {
       const resp = await axios.get(item.url, {
-        timeout: 10000,
+        timeout: 8000,
         validateStatus: () => true
       });
 
@@ -150,15 +179,21 @@ const checkAndEmail = async () => {
     }
   }
 
-  if (!hasFailure) return;
+  // Only send email if failure exists
+  if (!hasFailure) {
+    console.log("All URLs OK - no email sent");
+    return;
+  }
 
-  const message = activeUrls.map(r => `${r.url} -> ${r.status}`).join("\n");
+  const message = activeUrls
+    .map(r => `${r.url} -> ${r.status}`)
+    .join("\n");
 
   try {
     await transporter.sendMail({
       from: '"URL Monitor" <laxshlax@gmail.com>',
       to: alertEmail,
-      subject: "⚠️ URL Alert",
+      subject: monitorSubject,
       text: message
     });
 
@@ -170,6 +205,8 @@ const checkAndEmail = async () => {
       }
     });
 
+    console.log("📧 Alert email sent");
+
   } catch (err) {
     console.error("Email failed:", err.message);
   }
@@ -180,5 +217,5 @@ const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
   console.log("Server running on", PORT);
-  startScheduler();
+  startScheduler(); // works only if server stays awake
 });
