@@ -42,8 +42,15 @@ app.post("/check", async (req, res) => {
         }
 
       } catch (err) {
-        const code = err.response?.status || "DOWN";
-        results.push({ url, status: "Fail (" + code + ")" });
+        const code = err.response?.status;
+
+if (code === 403) {
+  results.push({ url, status: "Working (403 - Restricted)" });
+} else if (code === 404) {
+  results.push({ url, status: "Fail (404)" });
+} else {
+  results.push({ url, status: "Fail (" + (code || "DOWN") + ")" });
+}
       }
     }
 
