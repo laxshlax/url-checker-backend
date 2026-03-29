@@ -1,18 +1,23 @@
 const express = require("express");
 const axios = require("axios");
 const cors = require("cors");
+const nodemailer = require("nodemailer");
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Health check route
+/* =========================
+   HEALTH CHECK
+========================= */
 app.get("/", (req, res) => {
   res.send("API is running");
 });
 
-// Main URL check route
+/* =========================
+   URL CHECK ROUTE
+========================= */
 app.post("/check", async (req, res) => {
   try {
     const urls = req.body.urls;
@@ -28,17 +33,14 @@ app.post("/check", async (req, res) => {
         const response = await axios.get(url, {
           maxRedirects: 5,
           timeout: 10000,
-          validateStatus: () => true // 🔥 prevents axios from throwing on 4xx
+          validateStatus: () => true
         });
 
         const statusCode = response.status;
         const body = response.data;
 
-        // DOI-specific detection
-        if (
-          typeof body === "string" &&
-          body.includes("DOI Not Found")
-        ) {
+        // DOI detection
+        if (typeof body === "string" && body.includes("DOI Not Found")) {
           results.push({ url, status: "Invalid DOI" });
           continue;
         }
@@ -63,13 +65,55 @@ app.post("/check", async (req, res) => {
     return res.json(results);
 
   } catch (err) {
-    console.error("SERVER ERROR:", err);
+    console.error("CHECK ERROR:", err);
     return res.status(500).json({ error: "Server error" });
   }
 });
 
-// Start server
+/* =========================
+   EMAIL ROUTE
+========================= */
+app.post("/send-email", async (req, res) => {
+  const { email, results } = req.body;
+
+  if (!email || !results) {
+    return res.status(400).json({ error: "Missing email or results" });
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: "YOUR_EMAIL@gmail.com",       // 🔴 replace
+        pass: "YOUR_APP_PASSWORD"           // 🔴 replace (Gmail App Password)
+      }
+    });
+
+    // Format email body
+    const message = results
+      .map(r => `${r.url} → ${r.status}`)
+      .join("\n");
+
+    await transporter.sendMail({
+      from: "YOUR_EMAIL@gmail.com",
+      to: email,
+      subject: "URL Check Results",
+      text: message
+    });
+
+    return res.json({ success: true });
+
+  } catch (err) {
+    console.error("EMAIL ERROR:", err);
+    return res.status(500).json({ error: "Email failed" });
+  }
+});
+
+/* =========================
+   START SERVER
+========================= */
 const PORT = process.env.PORT || 10000;
+
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
 });
