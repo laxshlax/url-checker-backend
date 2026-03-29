@@ -9,27 +9,28 @@ app.use(cors());
 app.use(express.json());
 
 /* =========================
-   EMAIL CONFIGURATION
+   EMAIL CONFIGURATION (GMAIL PRESET)
 ========================= */
+// 'service: gmail' is the most stable way to connect from Render
 const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 465,
-  secure: true, // true for 465, false for other ports
+  service: 'gmail',
   auth: {
     user: "laxshlax@gmail.com",
-    pass: process.env.EMAIL_PASS // Use a 16-character App Password here
+    pass: process.env.EMAIL_PASS // Must be a 16-character App Password
   },
-   connectionTimeout: 10000, // Wait 10 seconds before giving up
-  greetingTimeout: 10000,
-  socketTimeout: 10000
+  // Increased timeouts to handle cloud network latency
+  connectionTimeout: 20000, 
+  greetingTimeout: 20000,
+  socketTimeout: 20000
 });
 
 // Verify connection configuration on startup
+// CHECK YOUR RENDER LOGS FOR THESE MESSAGES
 transporter.verify((error, success) => {
   if (error) {
-    console.error("SMTP Connection Error:", error);
+    console.error("❌ SMTP Connection Error:", error.message);
   } else {
-    console.log("Server is ready to take our messages");
+    console.log("✅ Success: Server is ready to take our messages");
   }
 });
 
@@ -64,15 +65,19 @@ app.post("/check", async (req, res) => {
         const statusCode = response.status;
         const body = response.data;
 
+        // DOI detection
         if (typeof body === "string" && body.includes("DOI Not Found")) {
           results.push({ url, status: "Invalid DOI" });
           continue;
         }
 
+        // Status classification
         if (statusCode === 200) {
           results.push({ url, status: "Working (200)" });
         } else if (statusCode === 403) {
           results.push({ url, status: "Working (403 - Restricted)" });
+        } else if (statusCode === 404) {
+          results.push({ url, status: "Fail (404)" });
         } else {
           results.push({ url, status: `Fail (${statusCode})` });
         }
@@ -114,12 +119,12 @@ app.post("/send-email", async (req, res) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log("Email sent: " + info.response);
+    console.log("📧 Email sent: " + info.response);
     
     return res.json({ success: true, messageId: info.messageId });
 
   } catch (err) {
-    console.error("EMAIL SENDING ERROR:", err);
+    console.error("📧 EMAIL SENDING ERROR:", err.message);
     return res.status(500).json({ 
       error: "Email failed", 
       details: err.message 
@@ -133,5 +138,5 @@ app.post("/send-email", async (req, res) => {
 const PORT = process.env.PORT || 10000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
