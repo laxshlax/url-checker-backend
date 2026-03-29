@@ -95,7 +95,7 @@ app.post("/send-email", async (req, res) => {
       .join("\n");
 
     await transporter.sendMail({
-      from: "YOUR_EMAIL@gmail.com",
+      from: "laxshlax@gmail.com",
       to: email,
       subject: "URL Check Results",
       text: message
