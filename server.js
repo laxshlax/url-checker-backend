@@ -1,5 +1,5 @@
 const express = require("express");
-const axios = require("axios");
+const { gotScraping } = require("got-scraping");
 const cors = require("cors");
 const nodemailer = require("nodemailer");
 
@@ -16,18 +16,6 @@ let monitorSubject = "⚠️ URL Alert";
 
 let intervalMs = 3600000;
 
-/* ================= CONFIG ================= */
-// Common headers to mimic a real Chrome browser
-const BROWSER_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.5",
-  "Referer": "https://www.google.com/",
-  "Connection": "keep-alive",
-  "Upgrade-Insecure-Requests": "1",
-  "Cache-Control": "max-age=0"
-};
-
 /* ================= EMAIL ================= */
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -41,24 +29,27 @@ const transporter = nodemailer.createTransport({
 app.get("/", (req, res) => res.send("OK"));
 
 /* ================= CHECK LOGIC ================= */
-// Extracted helper function for re-use in manual and monitor checks
 async function performUrlCheck(url) {
   try {
-    const r = await axios.get(url, {
-      headers: BROWSER_HEADERS,
-      timeout: 15000,           // Increased timeout for slower journal servers
-      maxRedirects: 10,         // Ensure we follow DOI redirects
-      validateStatus: () => true // Allow us to handle 403, 404, etc. manually
+    // got-scraping automatically handles browser-like headers and TLS fingerprints
+    const response = await gotScraping.get(url, {
+      timeout: { request: 20000 }, // Increased for slow academic servers
+      retry: { limit: 1 },
+      followRedirect: true
     });
 
     return {
       url,
-      status: r.status === 200 ? "✅ Working" : `❌ Fail (${r.status})`
+      status: response.statusCode === 200 ? "✅ Working" : `❌ Fail (${response.statusCode})`
     };
   } catch (err) {
-    // Check if it's a specific timeout or a general connection error
-    const msg = err.code === 'ECONNABORTED' ? "⚠️ Timeout" : "⚠️ Down";
-    return { url, status: msg };
+    // Catch specific HTTP errors (like 403, 404, 500)
+    if (err.response) {
+      return { url, status: `❌ Fail (${err.response.statusCode})` };
+    }
+    // Catch timeouts or network issues
+    const errorMsg = err.code === 'ETIMEDOUT' ? "⚠️ Timeout" : "⚠️ Down";
+    return { url, status: errorMsg };
   }
 }
 
@@ -69,10 +60,8 @@ app.post("/check", async (req, res) => {
   try {
     const results = await Promise.all(urls.map(url => performUrlCheck(url)));
 
-    // EMAIL NOW
     if (sendEmail && alertEmail) {
       const message = results.map(r => `${r.url} -> ${r.status}`).join("\n");
-
       try {
         await transporter.sendMail({
           from: '"URL Monitor" <laxshlax@gmail.com>',
@@ -80,16 +69,14 @@ app.post("/check", async (req, res) => {
           subject: manualSubject,
           text: message
         });
-        console.log("Manual email sent");
       } catch (err) {
-        console.error("Manual email failed:", err.message);
+        console.error("Email failed:", err.message);
       }
     }
 
     res.json({ results });
-
   } catch (err) {
-    console.error("Endpoint check failed:", err);
+    console.error("Check failed:", err);
     res.status(500).json({ error: "Check failed" });
   }
 });
@@ -134,18 +121,15 @@ app.get("/urls", (req, res) => {
 
 app.post("/urls/add", (req, res) => {
   const { url } = req.body;
-
   if (!url || activeUrls.find(u => u.url === url)) {
     return res.status(400).json({ error: "Duplicate or invalid" });
   }
-
   activeUrls.push({
     url,
     status: "Not checked",
     lastChecked: null,
     lastEmailSent: null
   });
-
   res.json({ message: "Added" });
 });
 
@@ -157,23 +141,18 @@ app.post("/urls/remove", (req, res) => {
 /* ================= MONITOR ================= */
 const checkAndEmail = async () => {
   if (!activeUrls.length) return;
-
   let hasFailure = false;
 
   for (const u of activeUrls) {
     const result = await performUrlCheck(u.url);
     u.status = result.status;
     u.lastChecked = new Date().toLocaleString();
-
-    if (!u.status.includes("Working")) {
-      hasFailure = true;
-    }
+    if (!u.status.includes("Working")) hasFailure = true;
   }
 
   if (!hasFailure) return;
 
   const message = activeUrls.map(r => `${r.url} -> ${r.status}`).join("\n");
-
   try {
     await transporter.sendMail({
       from: '"URL Monitor" <laxshlax@gmail.com>',
@@ -181,20 +160,15 @@ const checkAndEmail = async () => {
       subject: monitorSubject,
       text: message
     });
-
     const now = new Date().toLocaleString();
     activeUrls.forEach(u => {
       if (!u.status.includes("Working")) u.lastEmailSent = now;
     });
-
-    console.log("Monitoring email sent");
-
   } catch (err) {
-    console.error("Monitoring email failed:", err.message);
+    console.error("Monitor email failed:", err.message);
   }
 };
 
-/* ================= CRON / MANUAL TRIGGER ================= */
 app.get("/check-monitor", async (req, res) => {
   await checkAndEmail();
   res.send("done");
@@ -202,7 +176,6 @@ app.get("/check-monitor", async (req, res) => {
 
 /* ================= START ================= */
 const PORT = process.env.PORT || 10000;
-
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   startScheduler();
